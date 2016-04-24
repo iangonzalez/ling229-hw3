@@ -14,9 +14,9 @@ def init_opts():
     optparser.add_option("-r", "--rounds", dest="em_rounds", default=4, type="int", help="rounds of EM algorithm to do.")
 
     # extensions 
-    optparser.add_option("-e1", "--both_ways", dest="e1", default=False, help="Include extension 1")
-    optparser.add_option("-e2", "--null_words", dest="e2", default=False, help="Include extension 2: adding null words to source")
-    optparser.add_option("-e3", "--model2", dest="e3", default=False, help="Include extension 3: IBM Model 2")
+    optparser.add_option("-1", action="store_true", dest="e1", default=False, help="Include extension 1")
+    optparser.add_option("-2", action="store_true", dest="e2", default=False, help="Include extension 2: adding null words to source")
+    optparser.add_option("-3", action="store_true", dest="e3", default=False, help="Include extension 3: IBM Model 2")
 
     # debug 
     optparser.add_option("-D", "--debug", dest="DEBUG", default=False, help="Debugging option")
@@ -25,7 +25,11 @@ def init_opts():
     return opts 
 
 
-def train(opts, bitext, l1, l2): 
+def train(opts, bitext): 
+    # initialize to uniform distribution
+    l1 = set(reduce(lambda x, y: x+y, [f for (f,e) in bitext]))
+    l2 = set(reduce(lambda x, y: x+y, [e for (f,e) in bitext]))
+
     # EM algorithm
     translation_probs = defaultdict(float)
     counts = defaultdict(float)
@@ -75,7 +79,10 @@ def train(opts, bitext, l1, l2):
 
 def decode(bitext, translation_probs):
     # decoding correct alignments
-    for (f, e) in bitext: 
+    alignments = list()
+
+    for k, (f, e) in enumerate(bitext): 
+        s = set()
         for i, f_i in enumerate(f): 
             bestp = 0 
             bestj = 0 
@@ -84,11 +91,32 @@ def decode(bitext, translation_probs):
                 if (trans > bestp): 
                     bestp = trans
                     bestj = j
-            sys.stdout.write("%i-%i " % (i, bestj))
+            s.add((i, bestj))
+        alignments.append(s)
+
+    return alignments
+
+
+def print_alignments(bitext, alignments): 
+    for k in range(len(alignments)):
+        for (i, j) in alignments[k]: 
+            sys.stdout.write("%i-%i " % (i, j))
         sys.stdout.write("\n")
 
-def print_alignments(alignments): 
+def reverse_bitext(bitext): 
+    for (f, e) in bitext: 
+        yield (e, f)
 
+
+def intersect(a1, a2): 
+    assert len(a1) == len(a2)
+    
+    alignments = list() 
+    for i in range(len(a1)): 
+        alignments.append(a1[i].intersection(a2[i]))
+
+    return alignments
+    
 
 def main(): 
     opts = init_opts()
@@ -105,20 +133,24 @@ def main():
 
     sys.stderr.write("Training with IBM model 1...\n")
     bitext = [[sentence.strip().split() for sentence in pair] for pair in zip(open(f_data), open(e_data))[:opts.num_sents]]
-
-     # initialize to uniform distribution
-    all_foreign_words = set(reduce(lambda x, y: x+y, [f for (f,e) in bitext]))
-    all_english_words = set(reduce(lambda x, y: x+y, [e for (f,e) in bitext]))
-
-    translation_probs = train(all_foreign_words, all_english_words)
+    
+    translation_probs = train(opts, bitext)
     alignments = decode(bitext, translation_probs)
     
     if opts.e1: # set intersection of decoded alignments 
-        translation_probs_2 = train(all_english_words, all_foreign_words)
-        alignments_2 = decode(bitext, translation_probs_2)
-        alignments = 
+        bitext_reverse = list(reverse_bitext(bitext))
+        # print bitext_reverse
+        translation_probs_2 = train(opts, bitext_reverse)
+        decoded = decode(bitext_reverse, translation_probs_2)
+        alignments_2 = list()
+        for a in decoded: 
+            alignments_2.append(set (map( (lambda x: tuple(reversed(x))),  a )))
+        alignments = intersect(alignments, alignments_2)
 
-    print_alignments(alignments)
+    print_alignments(bitext, alignments)
+
+if __name__ == "__main__": 
+    main()
 
 """
 Documentation: According to the paper provided by the assignment spec
