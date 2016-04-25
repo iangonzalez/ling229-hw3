@@ -1,6 +1,9 @@
 #!/usr/bin/env python
 import optparse, sys, os, logging, itertools
 from collections import defaultdict
+# 500 its, no extras: AER 0.51
+# 500 its, opt 1 and 2: 0.41 AER
+# 500 its, opt 1 only: 0.40 AER
 import random 
 
 def init_opts(): 
@@ -16,7 +19,7 @@ def init_opts():
 
     # extensions 
     optparser.add_option("-1", action="store_true", dest="e1", default=False, help="Include extension 1")
-    optparser.add_option("-2", action="store_true", dest="e2", default=False, help="Include extension 2: adding null words to source")
+    optparser.add_option("-2", action="store_true", dest="e2", default=False, help="Include extension 2: adding pos tags")
     optparser.add_option("-3", action="store_true", dest="e3", default=False, help="Include extension 3: IBM Model 2")
 
     # debug 
@@ -26,7 +29,8 @@ def init_opts():
     return opts 
 
 
-def train(opts, bitext): 
+def train(opts, bitext):
+
     # initialize to uniform distribution
     l1 = set(reduce(lambda x, y: x+y, [f for (f,e) in bitext]))
     l2 = set(reduce(lambda x, y: x+y, [e for (f,e) in bitext]))
@@ -117,6 +121,7 @@ def intersect(a1, a2):
         alignments.append(a1[i].intersection(a2[i]))
 
     return alignments
+
 
 def ibm_model2(opts, bitext, translation_probs=None): 
     """
@@ -216,12 +221,15 @@ def decode_model2(bitext, translation_probs, distortion_probs):
 
     return alignments
 
-
 def main(): 
+    # intialize the options for the script
     opts = init_opts()
 
     f_data = "%s.%s" % (os.path.join(opts.datadir, opts.fileprefix), opts.french)
     e_data = "%s.%s" % (os.path.join(opts.datadir, opts.fileprefix), opts.english)
+
+    if opts.e2:
+        e_data = os.path.join(opts.datadir, "english_tagged1000.txt")
 
     if opts.DEBUG: 
         f_data = opts.datadir + "/frenchtest.txt"
@@ -234,7 +242,6 @@ def main():
 
     sys.stderr.write("Training with IBM model 1...\n")
     translation_probs = train(opts, bitext)
-    
     if opts.e3: 
         translation_probs, distortion_probs = ibm_model2(opts, bitext, translation_probs)
         sys.stderr.write("Decoding with IBM model 2")
