@@ -166,10 +166,15 @@ def intersect(a1, a2):
 
 
 def train_ibm_model2(opts, bitext, translation_probs=None): 
-      # initialize to random values 
+    # initialize to random values 
     l1 = set(reduce(lambda x, y: x+y, [f for (f,e) in bitext]))
     l2 = set(reduce(lambda x, y: x+y, [e for (f,e) in bitext]))
 
+
+    """
+    Can be supplied with initialized translation probabilities from 
+    IBM model 1; otherwise, use a random distribution 
+    """
     trans_probs = translation_probs
     if not translation_probs: 
         trans_probs = defaultdict(float)
@@ -177,6 +182,9 @@ def train_ibm_model2(opts, bitext, translation_probs=None):
     distortion_probs = defaultdict(float)
     counts = defaultdict(float)
 
+    """
+    Initialize with a random distribution from 0 to 1 
+    """
     for (k, (f, e)) in enumerate(bitext):
         m_k = len(f)
         l_k = len(e)
@@ -185,13 +193,23 @@ def train_ibm_model2(opts, bitext, translation_probs=None):
                 if not translation_probs: 
                     trans_probs[ (f_i, e_j) ] = random.uniform(0.0, 1.0)
                 distortion_probs[ (j, i, l_k, m_k) ] = random.uniform(0.0, 1.0)
-                counts[ (f_i, e_j) ] = 0.0
 
-    # execute em the number of times specified
+    """
+    Execute E/M for given number of rounds 
+    """
     for d in range(opts.em_rounds):
         sys.stderr.write("IBM model 2: Running E/M " + str(d) +"\n")
         
-        # E step
+        # reset counts for next step
+        for k in counts: 
+            counts[k] = 0.0
+        
+        """
+        E step: update counts for each of (e_j, f_i), 
+        (e_j), (j|i, l, m) & (i, l, m) by incrementing 
+        by delta (the production of the distortion & transition probabilities 
+        for the word pair divided by the normalization factor)
+        """
         for (k, (f, e)) in enumerate(bitext):
             m_k = len(f)
             l_k = len(e)
@@ -202,33 +220,37 @@ def train_ibm_model2(opts, bitext, translation_probs=None):
 
                 for (j, e_j) in enumerate(e): 
                     d_kij = (distortion_probs[ (j, i, l_k, m_k) ] *  trans_probs[ (f_i, e_j) ]) / norm 
-                    
                     counts[ (e_j, f_i) ] += d_kij 
                     counts[ (e_j) ] += d_kij 
-                
                     counts[ (j, i, l_k, m_k) ] += d_kij 
                     counts[ (i, l_k, m_k) ] += d_kij 
-                    
 
-        # M step 
+        """
+        M step: normalize using counts determined above. 
+            translation probability updated by normalizing by total count of e_j vs counts of (e_j, f_i) pair; 
+            distortion probability updated by normalizing by total count of (i, l, m) vs counts of (j|i, l, m)
+        """
         for (k, (f, e)) in enumerate(bitext):
             m_k = len(f)
             l_k = len(e)
             for (i, f_i) in enumerate(f):
                 for (j, e_j) in enumerate(e): 
-                    trans_probs[ (f_i, e_j) ] = counts[ (e_j, f_i) ] / counts[ (e_j) ] 
-                    distortion_probs[ (j, i, l_k, m_k) ] = counts[ (j, i, l_k, m_k) ] / counts[ (i, l_k, m_k) ]
-
-        # reset counts for next step
-        for k in counts: 
-            counts[k] = 0.0
+                    newtrans = counts[ (e_j, f_i) ] / counts[ (e_j) ] 
+                    distort = counts[ (j, i, l_k, m_k) ] / counts[ (i, l_k, m_k) ]
+                    trans_probs[ (f_i, e_j) ] = newtrans 
+                    distortion_probs[ (j, i, l_k, m_k) ] = distort
 
         sys.stderr.write("IBM model 2: Completed step " + str(d) + "\n")
-
     return trans_probs, distortion_probs
 
 def decode_model2(bitext, translation_probs, distortion_probs): 
-    # decoding correct alignments
+
+    """
+    Decodes the correct alignment based on translation probabilities and distortion probabilities. 
+    Uses the formula described in the paper; 
+        determines the maximum of the product of the translation & distortion probabilities
+        for words f_i and e_j in a sentence pair (f, e) 
+    """
     alignments = list()
 
     for k, (f, e) in enumerate(bitext): 
@@ -239,12 +261,11 @@ def decode_model2(bitext, translation_probs, distortion_probs):
             bestp = 0
             bestj = 0
             for j, e_j in enumerate(e): 
-                prod = (translation_probs[ ( f_i, e_j ) ]) * (distortion_probs[ (j, i, l_k, m_k) ])
-                sys.stderr.write(str(prod) + "\t")
+                prod = translation_probs[ ( f_i, e_j ) ] * distortion_probs[ (j, i, l_k, m_k) ]
+
                 if (prod > bestp): 
                     bestp = prod 
                     bestj = j
-            sys.stderr.write(str(bestj) + "\t")
             s.add((i, bestj))
         alignments.append(s)
 
@@ -271,26 +292,27 @@ def main():
     if opts.logfile:
         logging.basicConfig(filename=opts.logfile, filemode='w', level=logging.INFO)
 
-    # with extension 3 do ibm model 2
+
+    sys.stderr.write("Training with IBM model 1...\n")
+    translation_probs = train_ibm_model1(opts, bitext)
     if opts.e3: 
-        translation_probs, distortion_probs = train_ibm_model2(opts, bitext)
+        translation_probs, distortion_probs = train_ibm_model2(opts, bitext, translation_probs)
+        sys.stderr.write("Decoding with IBM model 2")
         alignments = decode_model2(bitext, translation_probs, distortion_probs)
     else: 
-        sys.stderr.write("Training with IBM model 1...\n")
-        translation_probs = train_ibm_model1(opts, bitext)
         alignments = decode(bitext, translation_probs)
+    
+    # with extension 1 do p(f|e) and then p(e|f), then compute intersection     
+    if opts.e1: # set intersection of decoded alignments 
+        sys.stderr.write("Using extension 1\n")
         
-        # with extension 1 do p(f|e) and then p(e|f), then compute intersection 
-        if opts.e1: # set intersection of decoded alignments 
-            sys.stderr.write("Using extension 1\n")
-            
-            # print bitext_reverse
-            translation_probs_2 = train_ibm_model1(opts, bitext_reverse)
-            decoded = decode(bitext_reverse, translation_probs_2)
-            alignments_2 = list()
-            for a in decoded: 
-                alignments_2.append(set (map( (lambda x: tuple(reversed(x))),  a )))
-            alignments = intersect(alignments, alignments_2)
+        # print bitext_reverse
+        translation_probs_2 = train_ibm_model1(opts, bitext_reverse)
+        decoded = decode(bitext_reverse, translation_probs_2)
+        alignments_2 = list()
+        for a in decoded: 
+            alignments_2.append(set (map( (lambda x: tuple(reversed(x))),  a )))
+        alignments = intersect(alignments, alignments_2)
 
     print_alignments(bitext, alignments)
 
