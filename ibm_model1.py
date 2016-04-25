@@ -1,11 +1,31 @@
 #!/usr/bin/env python
-import optparse, sys, os, logging, itertools
+import optparse, sys, os, logging, itertools,math
 from collections import defaultdict
 # 500 its, no extras: AER 0.51
 # 500 its, opt 1 and 2: 0.41 AER
 # 500 its, opt 1 only: 0.40 AER
 import random 
 
+
+
+"""
+USAGE FOR THIS SCRIPT:
+This script outputs alignments for a given bitext based on a modified version of IBM model 1.
+This script takes all of the arguments taken by default.py and outputs alignments in the same format.
+Some options have been added:
+    -r: number of rounds for the EM algorithm
+    -1: Extension 1. This corresponds to the first suggestion in the assignment, which does p(f|e) then p(e|f)
+        and uses the intersection of the alignments calculated as the result.
+    -2: Extension 2. This extension uses a POS-tagged version of the first 1000 english sentences instead of 
+        the untagged version to calculate alignments.
+    -3: Extension 3. This extension runs IBM model 2 after initalizing its translation probabilities from model 1
+        and outputs the alignments that maximize its parameters.
+"""
+
+def negative_log(num):
+    return -1 * math.log(num)
+
+# Initialize the option parser and parse the arguments passed in by the user
 def init_opts(): 
     optparser = optparse.OptionParser()
     optparser.add_option("-d", "--datadir", dest="datadir", default="data", help="data directory (default=data)")
@@ -28,10 +48,19 @@ def init_opts():
     (opts, _) = optparser.parse_args()
     return opts 
 
+# Function for training ibm model 1.
+def train_ibm_model1(opts, bitext):
+    """
+    This implements the ibm model 1 EM training algorithm as described in the class lecture slides.
+    Translation probabilities are initialized uniformly. In the E step, alignment probabilities are
+    calculated based on word co-occurence. In the M step, these are renormalized. 
+    (more details on p.57 of first MT lecture notes).
 
-def train(opts, bitext):
+    Params: OptionParser object and the bitext.
+    Output: translation probabilities in a dictionary mapping tuples to floats
+    """
 
-    # initialize to uniform distribution
+    # get the unique words in the bitext
     l1 = set(reduce(lambda x, y: x+y, [f for (f,e) in bitext]))
     l2 = set(reduce(lambda x, y: x+y, [e for (f,e) in bitext]))
 
@@ -39,6 +68,7 @@ def train(opts, bitext):
     translation_probs = defaultdict(float)
     counts = defaultdict(float)
 
+    # initialize to uniform distribution
     unif_prob = float(1.0/len(l2))
     for f_i in l1:
         for e_j in l2:
@@ -49,9 +79,10 @@ def train(opts, bitext):
     for i in range(opts.em_rounds):
         
         sys.stderr.write("Running E step " + str(i) +"\n")
+        
         # E step
         for (n, (f, e)) in enumerate(bitext):
-
+            # compute initial alignment probabilities
             for f_i in f:
                 trans_prob_sum = sum([translation_probs[(f_i, e_j)] for e_j in e])
 
@@ -59,6 +90,7 @@ def train(opts, bitext):
                     alignment_prob = translation_probs[(f_i, e_j)] / trans_prob_sum
                     counts[(f_i, e_j)] += alignment_prob
 
+        #print stuff in debug mode
         if opts.DEBUG:
             for f_i in l1:
                 for e_j in l2:
@@ -84,6 +116,14 @@ def train(opts, bitext):
 
 
 def decode(bitext, translation_probs):
+    """
+    Decodes the translation probabilities from IBM model 1 to produce alignments for the bitext.
+    This follows the algorithm outlined in the assignment exactly.
+
+    Params: bitext and the translation probabilities from IBM model 1.
+    Output: alignments as list of tuples
+    """
+
     # decoding correct alignments
     alignments = list()
 
@@ -109,10 +149,12 @@ def print_alignments(bitext, alignments):
             sys.stdout.write("%i-%i " % (i, j))
         sys.stdout.write("\n")
 
+# reverse order of languages in bitext
 def reverse_bitext(bitext): 
     for (f, e) in bitext: 
         yield (e, f)
 
+# Compute the set intersection of two given alignments (tuple sets)
 def intersect(a1, a2): 
     assert len(a1) == len(a2)
     
@@ -123,7 +165,7 @@ def intersect(a1, a2):
     return alignments
 
 
-def ibm_model2(opts, bitext, translation_probs=None): 
+def train_ibm_model2(opts, bitext, translation_probs=None): 
       # initialize to random values 
     l1 = set(reduce(lambda x, y: x+y, [f for (f,e) in bitext]))
     l2 = set(reduce(lambda x, y: x+y, [e for (f,e) in bitext]))
@@ -186,7 +228,7 @@ def ibm_model2(opts, bitext, translation_probs=None):
     return trans_probs, distortion_probs
 
 def decode_model2(bitext, translation_probs, distortion_probs): 
-     # decoding correct alignments
+    # decoding correct alignments
     alignments = list()
 
     for k, (f, e) in enumerate(bitext): 
@@ -194,9 +236,10 @@ def decode_model2(bitext, translation_probs, distortion_probs):
         l_k = len(e)
         s = set()
         for i, f_i in enumerate(f):
-            bestp = bestj = 0 
+            bestp = 0
+            bestj = 0
             for j, e_j in enumerate(e): 
-                prod = translation_probs[ ( f_i, e_j ) ] * distortion_probs[ (j, i, l_k, m_k) ]
+                prod = (translation_probs[ ( f_i, e_j ) ]) * (distortion_probs[ (j, i, l_k, m_k) ])
                 sys.stderr.write(str(prod) + "\t")
                 if (prod > bestp): 
                     bestp = prod 
@@ -214,6 +257,7 @@ def main():
     f_data = "%s.%s" % (os.path.join(opts.datadir, opts.fileprefix), opts.french)
     e_data = "%s.%s" % (os.path.join(opts.datadir, opts.fileprefix), opts.english)
 
+    # extension 2, do the tagged english data
     if opts.e2:
         e_data = os.path.join(opts.datadir, "english_tagged1000.txt")
 
@@ -221,25 +265,27 @@ def main():
         f_data = opts.datadir + "/frenchtest.txt"
         e_data = opts.datadir + "/englishtest.txt"
 
+    # get bitext
     bitext = [[sentence.strip().split() for sentence in pair] for pair in zip(open(f_data), open(e_data))[:opts.num_sents]]
     bitext_reverse = list(reverse_bitext(bitext))
     if opts.logfile:
         logging.basicConfig(filename=opts.logfile, filemode='w', level=logging.INFO)
 
-
+    # with extension 3 do ibm model 2
     if opts.e3: 
-        translation_probs, distortion_probs = ibm_model2(opts, bitext)
+        translation_probs, distortion_probs = train_ibm_model2(opts, bitext)
         alignments = decode_model2(bitext, translation_probs, distortion_probs)
     else: 
         sys.stderr.write("Training with IBM model 1...\n")
-        translation_probs = train(opts, bitext)
+        translation_probs = train_ibm_model1(opts, bitext)
         alignments = decode(bitext, translation_probs)
         
+        # with extension 1 do p(f|e) and then p(e|f), then compute intersection 
         if opts.e1: # set intersection of decoded alignments 
             sys.stderr.write("Using extension 1\n")
             
             # print bitext_reverse
-            translation_probs_2 = train(opts, bitext_reverse)
+            translation_probs_2 = train_ibm_model1(opts, bitext_reverse)
             decoded = decode(bitext_reverse, translation_probs_2)
             alignments_2 = list()
             for a in decoded: 
@@ -250,25 +296,3 @@ def main():
 
 if __name__ == "__main__": 
     main()
-
-"""
-Documentation: According to the paper provided by the assignment spec
-(http://aclweb.org/anthology/P/P04/P04-1066.pdf),  
-we determine the number of null words to add to the source sentence using the following formula: 
-Add a fixed number of null words per sentence. 
-In our implementation, we are using 3. 
-At each iteration of E/M, 
-  multiple the transition probabilities for the null word by the number of null words per sentence
-  to obtain the new transition probabilities for the null word 
-
-"""
-
-# better parameter initialization 
-"""
-Documentation: According to the papr provided by the assignment spec, 
-(http://aclweb.org/anthology/P/P04/P04-1066.pdf), 
-in order to improve parameter initialization, we 
-
-"""
-
-
