@@ -142,7 +142,6 @@ def ibm_model2(opts, bitext, translation_probs=None):
 
     # execute em the number of times specified
     for d in range(opts.em_rounds):
-        
         sys.stderr.write("IBM model 2: Running E/M " + str(d) +"\n")
         
         # E step
@@ -150,19 +149,26 @@ def ibm_model2(opts, bitext, translation_probs=None):
             m_k = len(f)
             l_k = len(e)
             for (i, f_i) in enumerate(f):
-                summation = 0
+                norm = 0
                 for (j, e_j) in enumerate(e): 
-                    summation += distortion_probs[ (j, i, l_k, m_k) ]
+                    norm += distortion_probs[ (j, i, l_k, m_k) ] *  trans_probs[ (f_i, e_j) ]
 
                 for (j, e_j) in enumerate(e): 
-                    trans = trans_probs[ (f_i, e_j) ]
-                    d_kij = (distortion_probs[ (j, i, l_k, m_k) ] *  trans) / (summation * trans) 
+                    d_kij = (distortion_probs[ (j, i, l_k, m_k) ] *  trans_probs[ (f_i, e_j) ]) / norm 
                     
                     counts[ (e_j, f_i) ] += d_kij 
                     counts[ (e_j) ] += d_kij 
+                
                     counts[ (j, i, l_k, m_k) ] += d_kij 
                     counts[ (i, l_k, m_k) ] += d_kij 
+                    
 
+        # M step 
+        for (k, (f, e)) in enumerate(bitext):
+            m_k = len(f)
+            l_k = len(e)
+            for (i, f_i) in enumerate(f):
+                for (j, e_j) in enumerate(e): 
                     trans_probs[ (f_i, e_j) ] = counts[ (e_j, f_i) ] / counts[ (e_j) ] 
                     distortion_probs[ (j, i, l_k, m_k) ] = counts[ (j, i, l_k, m_k) ] / counts[ (i, l_k, m_k) ]
 
@@ -186,7 +192,10 @@ def decode_model2(bitext, translation_probs, distortion_probs):
             bestp = bestj = 0 
             for j, e_j in enumerate(e): 
                 prod = translation_probs[ ( f_i, e_j ) ] * distortion_probs[ (j, i, l_k, m_k) ]
-                bestp, bestj = prod, j
+                sys.stderr.write(str(prod) + "\t")
+                if (prod > bestp): 
+                    bestp = prod 
+                    bestj = j
             sys.stderr.write(str(bestj) + "\t")
             s.add((i, bestj))
         alignments.append(s)
@@ -206,7 +215,7 @@ def main():
         e_data = opts.datadir + "/englishtest.txt"
 
     bitext = [[sentence.strip().split() for sentence in pair] for pair in zip(open(f_data), open(e_data))[:opts.num_sents]]
-
+    bitext_reverse = list(reverse_bitext(bitext))
     if opts.logfile:
         logging.basicConfig(filename=opts.logfile, filemode='w', level=logging.INFO)
 
@@ -220,7 +229,7 @@ def main():
         
         if opts.e1: # set intersection of decoded alignments 
             sys.stderr.write("Using extension 1\n")
-            bitext_reverse = list(reverse_bitext(bitext))
+            
             # print bitext_reverse
             translation_probs_2 = train(opts, bitext_reverse)
             decoded = decode(bitext_reverse, translation_probs_2)
